@@ -70,11 +70,11 @@ class DataPreprocessor:
         if missing_columns:
             raise ValueError(f"Missing required columns: {missing_columns}")
         
-        # Create features
+        # Create features (this now handles NaN values properly)
         df = self._create_features(df)
         
-        # Remove NaN values
-        df = df.dropna().reset_index(drop=True)
+        # Reset index after feature creation
+        df = df.reset_index(drop=True)
         
         print(f"Loaded {len(df)} records for {asset_name}")
         print(f"Data range: {df['timestamp'].min()} to {df['timestamp'].max()}")
@@ -114,6 +114,14 @@ class DataPreprocessor:
         # Volatility features
         df['volatility'] = df['close'].rolling(window=20).std()
         df['price_range'] = (df['high'] - df['low']) / df['close']
+        
+        # Handle NaN values more intelligently
+        # First, fill NaN values with forward fill, then backward fill
+        df = df.fillna(method='ffill').fillna(method='bfill')
+        
+        # If there are still NaN values, fill with 0 for numeric columns
+        numeric_columns = df.select_dtypes(include=[np.number]).columns
+        df[numeric_columns] = df[numeric_columns].fillna(0)
         
         return df
     
