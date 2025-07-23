@@ -446,20 +446,35 @@ class PricePredictor:
         
         # Scale data
         scaler = self.preprocessor.scalers[asset_name]
-        scaled_data = scaler.transform(df[feature_columns].dropna())
+        scaled_data = scaler.transform(df[feature_columns])
         
         # Get last sequence
         if len(scaled_data) >= self.sequence_length:
             sequence = scaled_data[-self.sequence_length:]
             
-            # Make prediction
+            # Make prediction (this returns scaled predictions)
             prediction_scaled = self.predict(asset_name, sequence)
             
-            # Inverse transform for close price
+            # Create a proper inverse transformation
+            # We need to create a full feature array with the predicted close prices
+            # and zeros for other features, then inverse transform
             close_idx = feature_columns.index('close')
+            
+            # Create dummy array with the same shape as original features
             dummy_array = np.zeros((len(prediction_scaled), len(feature_columns)))
+            
+            # Put the scaled predictions in the close price column
             dummy_array[:, close_idx] = prediction_scaled
+            
+            # Inverse transform to get original scale predictions
             prediction_original = scaler.inverse_transform(dummy_array)[:, close_idx]
+            
+            # Debug information
+            current_price = df['close'].iloc[-1]
+            print(f"Current {asset_name} price: ${current_price:,.2f}")
+            print(f"First prediction: ${prediction_original[0]:,.2f}")
+            print(f"Last prediction: ${prediction_original[-1]:,.2f}")
+            print(f"Prediction range: ${prediction_original.min():,.2f} to ${prediction_original.max():,.2f}")
             
             return prediction_original
         else:
@@ -486,12 +501,34 @@ class PricePredictor:
         all_predictions = np.array(all_predictions)
         all_targets = np.array(all_targets)
         
-        # Calculate metrics
-        mae = mean_absolute_error(all_targets.flatten(), all_predictions.flatten())
-        rmse = np.sqrt(mean_squared_error(all_targets.flatten(), all_predictions.flatten()))
+        # Convert predictions and targets back to original price scale
+        scaler = self.preprocessor.scalers[asset_name]
+        feature_columns = self.feature_columns[asset_name]
+        close_idx = feature_columns.index('close')
+        
+        # Reshape for inverse transform
+        predictions_reshaped = all_predictions.reshape(-1, 1)
+        targets_reshaped = all_targets.reshape(-1, 1)
+        
+        # Create dummy arrays for inverse transform
+        dummy_pred = np.zeros((len(predictions_reshaped), len(feature_columns)))
+        dummy_target = np.zeros((len(targets_reshaped), len(feature_columns)))
+        
+        dummy_pred[:, close_idx] = predictions_reshaped.flatten()
+        dummy_target[:, close_idx] = targets_reshaped.flatten()
+        
+        # Inverse transform to get original prices
+        predictions_original = scaler.inverse_transform(dummy_pred)[:, close_idx]
+        targets_original = scaler.inverse_transform(dummy_target)[:, close_idx]
+        
+        # Calculate metrics in original price units
+        mae = mean_absolute_error(targets_original, predictions_original)
+        rmse = np.sqrt(mean_squared_error(targets_original, predictions_original))
         
         print(f"\n{asset_name} Model Performance:")
-        print(f"MAE: {mae:.6f}")
-        print(f"RMSE: {rmse:.6f}")
+        print(f"MAE: ${mae:.2f}")
+        print(f"RMSE: ${rmse:.2f}")
+        print(f"Average Target Price: ${np.mean(targets_original):.2f}")
+        print(f"Average Predicted Price: ${np.mean(predictions_original):.2f}")
         
         return mae, rmse
