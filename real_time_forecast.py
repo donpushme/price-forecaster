@@ -159,28 +159,14 @@ class RealTimeForecaster:
             scaler = self.predictor.preprocessor.scalers[asset_name]
             scaled_data = scaler.transform(df[feature_columns])
             
-            # Get last 60 data points for prediction
-            if len(scaled_data) >= 60:
-                sequence = scaled_data[-60:]
-                
-                # Make prediction
-                prediction_scaled = self.predictor.predict(asset_name, sequence)
-                
-                # Inverse transform for close price
-                close_idx = feature_columns.index('close')
-                dummy_array = np.zeros((len(prediction_scaled), len(feature_columns)))
-                dummy_array[:, close_idx] = prediction_scaled
-                prediction_original = scaler.inverse_transform(dummy_array)[:, close_idx]
-                
-                # Generate timestamps for predictions
-                timestamps = []
-                for i in range(289):  # 289 points (current + 288 future)
-                    if i == 0:
-                        timestamps.append(current_time)
-                    else:
-                        timestamps.append(current_time + timedelta(minutes=5*i))
-                
-                return timestamps, prediction_original
+            # Get last N data points for prediction
+            seq_len = self.predictor.sequence_length
+            if len(df) >= seq_len:
+                recent_data = df.tail(seq_len)
+                prediction_df = self.predictor.predict_next_24h(asset_name, recent_data)
+                timestamps = prediction_df['timestamp'].tolist()
+                predictions = prediction_df['predicted_price'].values
+                return timestamps, predictions
             else:
                 print(f"Insufficient data for {asset_name}")
                 return None
