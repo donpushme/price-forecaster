@@ -56,17 +56,14 @@ class DataPreprocessor:
         self.ti = TechnicalIndicators()
     
     def load_and_preprocess(self, file_path, asset_name):
-        """Load CSV and create features - VOLUME IGNORED"""
+        """Load CSV and create features - BEST PRACTICE: drop NaNs after feature creation, no filling for training"""
         print(f"Loading {asset_name} data from {file_path}")
-        
-        # Load data
         df = pd.read_csv(file_path)
         print(f"Loaded raw data: {len(df)} rows")
         
         # Basic data validation and cleaning (ignore volume)
         df = df.dropna(subset=['open', 'high', 'low', 'close'])
         print(f"After dropping rows with missing OHLC: {len(df)} rows")
-        
         if len(df) == 0:
             raise ValueError(f"No valid OHLC data found in {file_path}")
         
@@ -86,38 +83,20 @@ class DataPreprocessor:
         price_cols = ['open', 'high', 'low', 'close']
         for col in price_cols:
             df = df[df[col] > 0]  # Remove zero or negative prices
-        
         print(f"After price validation: {len(df)} rows")
-        
-        if len(df) < 100:  # Need minimum data for technical indicators
+        if len(df) < 100:
             raise ValueError(f"Insufficient data after cleaning: {len(df)} rows (need at least 100)")
         
-        # Create features with better NaN handling
+        # Create features
         df = self._create_features(df)
-        
-        # More intelligent NaN handling
         initial_len = len(df)
-        
-        # Only drop rows where ALL technical indicators are NaN
-        # Keep rows where we have basic price data even if some indicators are missing
-        essential_cols = ['close', 'open', 'high', 'low', 'price_change', 'high_low_ratio']
-        df = df.dropna(subset=essential_cols)
-        
-        # For remaining NaN values in technical indicators, use forward fill then backward fill
-        indicator_cols = [col for col in df.columns if col not in essential_cols + ['timestamp']]
-        if len(indicator_cols) > 0:
-            df[indicator_cols] = df[indicator_cols].ffill().bfill()
-        
-        # Final NaN check - drop any remaining rows with NaN
-        df = df.dropna()
-        
+        # BEST PRACTICE: Drop all rows with any NaN after feature creation
+        df = df.dropna().reset_index(drop=True)
         dropped_rows = initial_len - len(df)
         if dropped_rows > 0:
-            print(f"Dropped {dropped_rows} rows with NaN values")
-        
+            print(f"Dropped {dropped_rows} rows with NaN values after feature creation")
         if len(df) == 0:
             raise ValueError(f"All data was dropped due to NaN values. Check data quality in {file_path}")
-        
         print(f"Final dataset: {len(df)} records for {asset_name}")
         print(f"Data range: {df['timestamp'].min()} to {df['timestamp'].max()}")
         return df
@@ -565,88 +544,76 @@ class PricePredictor:
         return train_losses, val_losses
     
     def predict_next_24h(self, asset_name, current_data):
-        """FIXED prediction method"""
+        """Prediction: only fill NaNs in the last row, drop NaNs in the rest (best practice)"""
         try:
             # Load model if not in memory
             if asset_name not in self.models:
                 self.load_model(asset_name)
-            
             # Convert to DataFrame and preprocess
             if isinstance(current_data, list):
                 df = pd.DataFrame(current_data)
             else:
                 df = current_data.copy()
-            
             # Ensure timestamp column
             if 'timestamp' in df.columns:
                 df['timestamp'] = pd.to_datetime(df['timestamp'])
-            
             # Create features
             df = self.preprocessor._create_features(df)
-            
-            # Remove NaN rows
-            df_clean = df.dropna()
-            
-            if len(df_clean) < self.sequence_length:
-                raise ValueError(f"Need at least {self.sequence_length} clean data points, got {len(df_clean)}")
-            
+            df = df.reset_index(drop=True)
+            # Fill NaNs in the last row only (neutral values)
+            last_idx = df.index[-1]
+            for col in df.columns:
+                if pd.isna(df.at[last_idx, col]):
+                    if 'rsi' in col:
+                        df.at[last_idx, col] = 50.0
+                    elif 'macd' in col:
+                        df.at[last_idx, col] = 0.0
+                    elif 'ma' in col or 'bb_' in col:
+                        df.at[last_idx, col] = df.at[last_idx, 'close']
+                    else:
+                        df.at[last_idx, col] = 0.0
+            # Drop NaNs in the rest
+            if len(df) > 1:
+                df = pd.concat([df.iloc[:-1].dropna(), df.iloc[[-1]]], ignore_index=True)
+            else:
+                df = df.dropna().reset_index(drop=True)
+            if len(df) < self.sequence_length:
+                raise ValueError(f"Need at least {self.sequence_length} clean data points, got {len(df)}")
             # Get feature columns and scale data
             feature_columns = self.feature_columns[asset_name]
             scaler = self.preprocessor.scalers[asset_name]
-            
-            # Ensure all required features are present
-            missing_features = [col for col in feature_columns if col not in df_clean.columns]
+            missing_features = [col for col in feature_columns if col not in df.columns]
             if missing_features:
                 raise ValueError(f"Missing features: {missing_features}")
-            
-            # Scale the data
-            scaled_data = scaler.transform(df_clean[feature_columns])
-            
-            # Get the last sequence
+            scaled_data = scaler.transform(df[feature_columns])
             sequence = scaled_data[-self.sequence_length:]
-            
             # Make prediction
             model = self.models[asset_name]
             model.eval()
-            
             with torch.no_grad():
                 sequence_tensor = torch.FloatTensor(sequence).unsqueeze(0).to(self.device)
                 prediction_scaled = model(sequence_tensor)
                 prediction_scaled = prediction_scaled.cpu().numpy().flatten()
-            
-            # CRITICAL FIX: Proper inverse transformation
+            # Inverse transform
             close_idx = feature_columns.index('close')
-            
-            # Create dummy array for inverse transformation
             dummy_array = np.zeros((len(prediction_scaled), len(feature_columns)))
             dummy_array[:, close_idx] = prediction_scaled
-            
-            # Inverse transform to get original prices
             prediction_original = scaler.inverse_transform(dummy_array)[:, close_idx]
-            
             # Generate timestamps for predictions (5-minute intervals)
-            last_timestamp = df_clean['timestamp'].iloc[-1]
-            prediction_timestamps = [
-                last_timestamp + pd.Timedelta(minutes=5*(i+1)) 
-                for i in range(len(prediction_original))
-            ]
-            
-            # Create prediction DataFrame
+            last_timestamp = df['timestamp'].iloc[-1]
+            prediction_timestamps = [last_timestamp + pd.Timedelta(minutes=5*(i+1)) for i in range(len(prediction_original))]
             prediction_df = pd.DataFrame({
                 'timestamp': prediction_timestamps,
                 'predicted_price': prediction_original
             })
-            
-            current_price = df_clean['close'].iloc[-1]
+            current_price = df['close'].iloc[-1]
             print(f"\n📊 {asset_name} Prediction Summary:")
             print(f"Current price: ${current_price:,.2f}")
-            print(f"1-hour prediction: ${prediction_original[11]:,.2f}")  # 12th 5-min interval
-            print(f"6-hour prediction: ${prediction_original[71]:,.2f}")  # 72nd 5-min interval
+            print(f"1-hour prediction: ${prediction_original[11]:,.2f}")
+            print(f"6-hour prediction: ${prediction_original[71]:,.2f}")
             print(f"24-hour prediction: ${prediction_original[-1]:,.2f}")
             print(f"Predicted change: {((prediction_original[-1] - current_price) / current_price * 100):+.2f}%")
-            
             return prediction_df
-            
         except Exception as e:
             print(f"❌ Prediction error for {asset_name}: {str(e)}")
             raise
