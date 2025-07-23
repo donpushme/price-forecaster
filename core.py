@@ -663,6 +663,8 @@ class PricePredictor:
         
         # Restore configuration
         config = checkpoint['config']
+        if 'sequence_length' in config:
+            del config['sequence_length']
         model = PricePredictionLSTM(**config).to(self.device)
         model.load_state_dict(checkpoint['model_state_dict'])
         
