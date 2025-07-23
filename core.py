@@ -56,13 +56,25 @@ class DataPreprocessor:
         self.ti = TechnicalIndicators()
     
     def load_and_preprocess(self, file_path, asset_name):
-        """Load CSV and create features"""
+        """Load CSV and create features with better NaN handling"""
         print(f"Loading {asset_name} data from {file_path}")
         
         # Load data
         df = pd.read_csv(file_path)
-        df['timestamp'] = pd.to_datetime(df['timestamp'])
+        print(f"Loaded raw data: {len(df)} rows")
+        
+        # Basic data validation and cleaning
+        df = df.dropna(subset=['open', 'high', 'low', 'close', 'volume'])
+        print(f"After dropping rows with missing OHLCV: {len(df)} rows")
+        
+        if len(df) == 0:
+            raise ValueError(f"No valid OHLCV data found in {file_path}")
+        
+        # Convert timestamp
+        df['timestamp'] = pd.to_datetime(df['timestamp'], errors='coerce')
+        df = df.dropna(subset=['timestamp'])
         df = df.sort_values('timestamp').reset_index(drop=True)
+        print(f"After timestamp cleaning: {len(df)} rows")
         
         # Ensure all required columns exist
         required_columns = ['timestamp', 'open', 'high', 'low', 'close', 'volume']
@@ -70,49 +82,105 @@ class DataPreprocessor:
         if missing_columns:
             raise ValueError(f"Missing required columns: {missing_columns}")
         
-        # Create features
+        # Validate price data
+        price_cols = ['open', 'high', 'low', 'close']
+        for col in price_cols:
+            df = df[df[col] > 0]  # Remove zero or negative prices
+        
+        df = df[df['volume'] >= 0]  # Remove negative volume
+        print(f"After price validation: {len(df)} rows")
+        
+        if len(df) < 100:  # Need minimum data for technical indicators
+            raise ValueError(f"Insufficient data after cleaning: {len(df)} rows (need at least 100)")
+        
+        # Create features with better NaN handling
         df = self._create_features(df)
         
-        # CRITICAL FIX: Remove rows with NaN values after feature creation
-        # This ensures we have clean data for training
+        # More intelligent NaN handling
         initial_len = len(df)
-        df = df.dropna().reset_index(drop=True)
-        dropped_rows = initial_len - len(df)
         
+        # Only drop rows where ALL technical indicators are NaN
+        # Keep rows where we have basic price data even if some indicators are missing
+        essential_cols = ['close', 'open', 'high', 'low', 'volume', 'price_change', 'high_low_ratio']
+        df = df.dropna(subset=essential_cols)
+        
+        # For remaining NaN values in technical indicators, use forward fill then backward fill
+        indicator_cols = [col for col in df.columns if col not in essential_cols + ['timestamp']]
+        df[indicator_cols] = df[indicator_cols].fillna(method='ffill').fillna(method='bfill')
+        
+        # Final NaN check - drop any remaining rows with NaN
+        df = df.dropna()
+        
+        dropped_rows = initial_len - len(df)
         if dropped_rows > 0:
             print(f"Dropped {dropped_rows} rows with NaN values")
+        
+        if len(df) == 0:
+            raise ValueError(f"All data was dropped due to NaN values. Check data quality in {file_path}")
         
         print(f"Final dataset: {len(df)} records for {asset_name}")
         print(f"Data range: {df['timestamp'].min()} to {df['timestamp'].max()}")
         return df
     
     def _create_features(self, df):
-        """Create technical indicators and price-based features - IMPROVED"""
-        # Basic price features
-        df['price_change'] = df['close'].pct_change()
-        df['high_low_ratio'] = df['high'] / df['low']
-        df['volume_change'] = df['volume'].pct_change()
+        """Create technical indicators and price-based features with robust NaN handling"""
+        # Ensure we have enough data for technical indicators
+        if len(df) < 50:  # Minimum for longest MA window
+            print("Warning: Dataset too small for all technical indicators")
         
-        # Technical indicators
-        df['rsi'] = self.ti.rsi(df['close'])
-        upper_bb, middle_bb, lower_bb = self.ti.bollinger_bands(df['close'])
-        df['bb_upper'] = upper_bb
-        df['bb_middle'] = middle_bb
-        df['bb_lower'] = lower_bb
-        df['bb_width'] = np.where(middle_bb != 0, (upper_bb - lower_bb) / middle_bb, 0)
+        # Basic price features (always calculable)
+        df['price_change'] = df['close'].pct_change().fillna(0)
+        df['high_low_ratio'] = (df['high'] / df['low']).fillna(1.0)
+        df['volume_change'] = df['volume'].pct_change().fillna(0)
         
-        macd_line, signal_line, histogram = self.ti.macd(df['close'])
-        df['macd'] = macd_line
-        df['macd_signal'] = signal_line
-        df['macd_histogram'] = histogram
+        # Technical indicators with conditional calculation
+        if len(df) >= 14:  # Minimum for RSI
+            df['rsi'] = self.ti.rsi(df['close']).fillna(50.0)  # Neutral RSI
+        else:
+            df['rsi'] = 50.0  # Neutral value
         
-        # Moving averages
-        mas = self.ti.moving_averages(df['close'])
+        if len(df) >= 20:  # Minimum for Bollinger Bands
+            upper_bb, middle_bb, lower_bb = self.ti.bollinger_bands(df['close'])
+            df['bb_upper'] = upper_bb.fillna(df['close'])
+            df['bb_middle'] = middle_bb.fillna(df['close'])
+            df['bb_lower'] = lower_bb.fillna(df['close'])
+            df['bb_width'] = np.where(
+                middle_bb.notna() & (middle_bb != 0), 
+                (upper_bb - lower_bb) / middle_bb, 
+                0
+            ).fillna(0)
+        else:
+            df['bb_upper'] = df['close']
+            df['bb_middle'] = df['close'] 
+            df['bb_lower'] = df['close']
+            df['bb_width'] = 0.0
+        
+        if len(df) >= 26:  # Minimum for MACD
+            macd_line, signal_line, histogram = self.ti.macd(df['close'])
+            df['macd'] = macd_line.fillna(0.0)
+            df['macd_signal'] = signal_line.fillna(0.0)
+            df['macd_histogram'] = histogram.fillna(0.0)
+        else:
+            df['macd'] = 0.0
+            df['macd_signal'] = 0.0
+            df['macd_histogram'] = 0.0
+        
+        # Moving averages with conditional windows
+        mas = self.ti.moving_averages(df['close'], windows=[5, 10, 20, 50])
         for ma_name, ma_values in mas.items():
-            df[ma_name] = ma_values
-            df[f'{ma_name}_ratio'] = np.where(ma_values != 0, df['close'] / ma_values, 1.0)
+            window = int(ma_name.split('_')[1])
+            if len(df) >= window:
+                df[ma_name] = ma_values.fillna(df['close'])
+                df[f'{ma_name}_ratio'] = np.where(
+                    ma_values.notna() & (ma_values != 0), 
+                    df['close'] / ma_values, 
+                    1.0
+                ).fillna(1.0)
+            else:
+                df[ma_name] = df['close']
+                df[f'{ma_name}_ratio'] = 1.0
         
-        # Time-based features (normalized)
+        # Time-based features (always calculable)
         df['hour_sin'] = np.sin(2 * np.pi * df['timestamp'].dt.hour / 24)
         df['hour_cos'] = np.cos(2 * np.pi * df['timestamp'].dt.hour / 24)
         df['day_sin'] = np.sin(2 * np.pi * df['timestamp'].dt.dayofweek / 7)
@@ -121,11 +189,12 @@ class DataPreprocessor:
         df['month_cos'] = np.cos(2 * np.pi * df['timestamp'].dt.month / 12)
         
         # Volatility features
-        df['volatility'] = df['close'].rolling(window=20).std()
-        df['price_range'] = np.where(df['close'] != 0, (df['high'] - df['low']) / df['close'], 0)
-        
-        # IMPORTANT: Don't fill NaN values here - let them be dropped later
-        # This ensures data quality
+        if len(df) >= 20:
+            df['volatility'] = df['close'].rolling(window=20).std().fillna(0.0)
+        else:
+            df['volatility'] = 0.0
+            
+        df['price_range'] = np.where(df['close'] != 0, (df['high'] - df['low']) / df['close'], 0).fillna(0)
         
         return df
     
