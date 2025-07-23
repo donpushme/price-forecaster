@@ -194,6 +194,24 @@ class DataPreprocessor:
         df['is_green'] = (df['close'] > df['open']).astype(float)
         return df
 
+    def prepare_sequences(self, data: pd.DataFrame, target_col: str = 'close') -> tuple:
+        """
+        Create sequences for training.
+        Returns (X, y) where:
+        - X: shape (num_samples, sequence_length, num_features)
+        - y: shape (num_samples, prediction_horizon)
+        """
+        data_clean = data.dropna().reset_index(drop=True)
+        feature_cols = [col for col in data_clean.columns if col not in ['timestamp', target_col]]
+        features = data_clean[feature_cols].values
+        targets = data_clean[target_col].values
+
+        X, y = [], []
+        for i in range(len(data_clean) - self.sequence_length - self.prediction_horizon):
+            X.append(features[i:(i + self.sequence_length)])
+            y.append(targets[(i + self.sequence_length):(i + self.sequence_length + self.prediction_horizon)])
+        return np.array(X), np.array(y)
+
 class BitcoinPredictionModel(nn.Module):
     """
     Advanced Bitcoin price prediction model using LSTM with attention mechanism
