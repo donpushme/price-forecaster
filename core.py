@@ -56,7 +56,7 @@ class DataPreprocessor:
         self.ti = TechnicalIndicators()
     
     def load_and_preprocess(self, file_path, asset_name):
-        """Load CSV and create features - BEST PRACTICE: drop NaNs after feature creation, no filling for training"""
+        """Load CSV and create features - BEST PRACTICE: drop NaNs after feature creation, no filling for training, IGNORE VOLUME"""
         print(f"Loading {asset_name} data from {file_path}")
         df = pd.read_csv(file_path)
         print(f"Loaded raw data: {len(df)} rows")
@@ -87,6 +87,10 @@ class DataPreprocessor:
         if len(df) < 100:
             raise ValueError(f"Insufficient data after cleaning: {len(df)} rows (need at least 100)")
         
+        # Drop volume column if present
+        if 'volume' in df.columns:
+            df = df.drop(columns=['volume'])
+        
         # Create features
         df = self._create_features(df)
         initial_len = len(df)
@@ -102,37 +106,30 @@ class DataPreprocessor:
         return df
     
     def _create_features(self, df):
-        """Create technical indicators and price-based features - NO VOLUME"""
+        """Create technical indicators and price-based features - IGNORE VOLUME"""
         # Ensure we have enough data for technical indicators
         if len(df) < 50:  # Minimum for longest MA window
             print("Warning: Dataset too small for all technical indicators")
-        
         # Basic price features (NO VOLUME FEATURES)
         price_change_calc = df['close'].pct_change()
         df['price_change'] = price_change_calc.fillna(0) if hasattr(price_change_calc, 'fillna') else 0.0
-        
         high_low_ratio_calc = df['high'] / df['low']
         df['high_low_ratio'] = high_low_ratio_calc.fillna(1.0) if hasattr(high_low_ratio_calc, 'fillna') else 1.0
-        
         price_range_calc = (df['high'] - df['low']) / df['close']
         df['price_range'] = price_range_calc.fillna(0) if hasattr(price_range_calc, 'fillna') else 0.0
-        
         open_close_ratio_calc = df['open'] / df['close']
         df['open_close_ratio'] = open_close_ratio_calc.fillna(1.0) if hasattr(open_close_ratio_calc, 'fillna') else 1.0
-        
         # Technical indicators with conditional calculation
         if len(df) >= 14:  # Minimum for RSI
             rsi_values = self.ti.rsi(df['close'])
             df['rsi'] = rsi_values.fillna(50.0) if hasattr(rsi_values, 'fillna') else 50.0
         else:
             df['rsi'] = 50.0  # Neutral value
-        
         if len(df) >= 20:  # Minimum for Bollinger Bands
             upper_bb, middle_bb, lower_bb = self.ti.bollinger_bands(df['close'])
             df['bb_upper'] = upper_bb.fillna(df['close']) if hasattr(upper_bb, 'fillna') else df['close']
             df['bb_middle'] = middle_bb.fillna(df['close']) if hasattr(middle_bb, 'fillna') else df['close']
             df['bb_lower'] = lower_bb.fillna(df['close']) if hasattr(lower_bb, 'fillna') else df['close']
-            
             # Safe calculation for bb_width
             if hasattr(middle_bb, 'notna'):
                 df['bb_width'] = np.where(
@@ -142,7 +139,6 @@ class DataPreprocessor:
                 )
             else:
                 df['bb_width'] = 0.0
-                
             # Safe calculation for bb_position
             bb_range = upper_bb - lower_bb
             if hasattr(bb_range, 'fillna'):
@@ -159,7 +155,6 @@ class DataPreprocessor:
             df['bb_lower'] = df['close']
             df['bb_width'] = 0.0
             df['bb_position'] = 0.5
-        
         if len(df) >= 26:  # Minimum for MACD
             macd_line, signal_line, histogram = self.ti.macd(df['close'])
             df['macd'] = macd_line.fillna(0.0) if hasattr(macd_line, 'fillna') else 0.0
@@ -169,14 +164,12 @@ class DataPreprocessor:
             df['macd'] = 0.0
             df['macd_signal'] = 0.0
             df['macd_histogram'] = 0.0
-        
         # Moving averages with conditional windows
         mas = self.ti.moving_averages(df['close'], windows=[5, 10, 20, 50])
         for ma_name, ma_values in mas.items():
             window = int(ma_name.split('_')[1])
             if len(df) >= window:
                 df[ma_name] = ma_values.fillna(df['close']) if hasattr(ma_values, 'fillna') else df['close']
-                
                 # Safe ratio calculation
                 if hasattr(ma_values, 'notna'):
                     df[f'{ma_name}_ratio'] = np.where(
@@ -186,7 +179,6 @@ class DataPreprocessor:
                     )
                 else:
                     df[f'{ma_name}_ratio'] = 1.0
-                
                 # Safe momentum calculation
                 momentum_calc = df['close'] - ma_values
                 df[f'{ma_name}_momentum'] = momentum_calc.fillna(0) if hasattr(momentum_calc, 'fillna') else 0.0
@@ -194,7 +186,6 @@ class DataPreprocessor:
                 df[ma_name] = df['close']
                 df[f'{ma_name}_ratio'] = 1.0
                 df[f'{ma_name}_momentum'] = 0.0
-        
         # Time-based features (always calculable)
         df['hour_sin'] = np.sin(2 * np.pi * df['timestamp'].dt.hour / 24)
         df['hour_cos'] = np.cos(2 * np.pi * df['timestamp'].dt.hour / 24)
@@ -202,11 +193,9 @@ class DataPreprocessor:
         df['day_cos'] = np.cos(2 * np.pi * df['timestamp'].dt.dayofweek / 7)
         df['month_sin'] = np.sin(2 * np.pi * df['timestamp'].dt.month / 12)
         df['month_cos'] = np.cos(2 * np.pi * df['timestamp'].dt.month / 12)
-        
         # Additional time features
         df['is_weekend'] = (df['timestamp'].dt.dayofweek >= 5).astype(float)
         df['hour_of_day'] = df['timestamp'].dt.hour / 24.0
-        
         # Volatility features
         if len(df) >= 20:
             volatility_values = df['close'].rolling(window=20).std()
@@ -219,26 +208,22 @@ class DataPreprocessor:
         else:
             df['volatility'] = 0.0
             df['volatility_ratio'] = 0.0
-        
         # Price momentum features
         if len(df) >= 5:
             momentum_5_calc = df['close'] / df['close'].shift(5) - 1
             df['momentum_5'] = momentum_5_calc.fillna(0) if hasattr(momentum_5_calc, 'fillna') else 0.0
         else:
             df['momentum_5'] = 0.0
-            
         if len(df) >= 10:
             momentum_10_calc = df['close'] / df['close'].shift(10) - 1
             df['momentum_10'] = momentum_10_calc.fillna(0) if hasattr(momentum_10_calc, 'fillna') else 0.0
         else:
             df['momentum_10'] = 0.0
-        
         # Candle pattern features
         df['body_size'] = abs(df['close'] - df['open']) / df['close']
         df['upper_shadow'] = (df['high'] - np.maximum(df['open'], df['close'])) / df['close']
         df['lower_shadow'] = (np.minimum(df['open'], df['close']) - df['low']) / df['close']
         df['is_green'] = (df['close'] > df['open']).astype(float)
-        
         return df
     
     def create_sequences(self, df, asset_name):

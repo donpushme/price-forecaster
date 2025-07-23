@@ -115,31 +115,30 @@ class RealTimeForecaster:
         return data_point
     
     def prepare_prediction_data(self, asset_name, current_price, current_time):
-        """Prepare data for prediction by combining historical data with current price"""
+        """Prepare data for prediction by combining historical data with current price, using a longer window for technical indicators"""
         try:
             # Load historical data
             df = pd.read_csv(self.data_files[asset_name])
             df['timestamp'] = pd.to_datetime(df['timestamp'])
-            
             # Create current data point
             current_data = self.create_current_data_point(
                 asset_name, current_price, current_time.strftime('%Y-%m-%d %H:%M:%S')
             )
-            
-            # Add current data to historical data
             current_df = pd.DataFrame([current_data])
             current_df['timestamp'] = pd.to_datetime(current_df['timestamp'])
-            
             # Combine and sort
             combined_df = pd.concat([df, current_df], ignore_index=True)
             combined_df = combined_df.sort_values('timestamp').reset_index(drop=True)
-            
+            # Use a much larger window for feature creation
+            window = self.predictor.sequence_length + 200
+            combined_df = combined_df.tail(window)
             # Create features
             combined_df = self.predictor.preprocessor._create_features(combined_df)
+            combined_df = combined_df.reset_index(drop=True)
+            # Drop NaNs
             combined_df = combined_df.dropna().reset_index(drop=True)
-            
+            print(f"After feature creation and NaN removal: {len(combined_df)} clean rows")
             return combined_df
-            
         except Exception as e:
             print(f"Error preparing prediction data for {asset_name}: {e}")
             return None
@@ -168,7 +167,7 @@ class RealTimeForecaster:
                 predictions = prediction_df['predicted_price'].values
                 return timestamps, predictions
             else:
-                print(f"Insufficient data for {asset_name}")
+                print(f"Insufficient data for {asset_name}: only {len(df)} clean rows after feature creation")
                 return None
                 
         except Exception as e:
