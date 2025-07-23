@@ -105,7 +105,8 @@ class DataPreprocessor:
         
         # For remaining NaN values in technical indicators, use forward fill then backward fill
         indicator_cols = [col for col in df.columns if col not in essential_cols + ['timestamp']]
-        df[indicator_cols] = df[indicator_cols].fillna(method='ffill').fillna(method='bfill')
+        if len(indicator_cols) > 0:
+            df[indicator_cols] = df[indicator_cols].ffill().bfill()
         
         # Final NaN check - drop any remaining rows with NaN
         df = df.dropna()
