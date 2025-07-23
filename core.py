@@ -56,19 +56,19 @@ class DataPreprocessor:
         self.ti = TechnicalIndicators()
     
     def load_and_preprocess(self, file_path, asset_name):
-        """Load CSV and create features with better NaN handling"""
+        """Load CSV and create features - VOLUME IGNORED"""
         print(f"Loading {asset_name} data from {file_path}")
         
         # Load data
         df = pd.read_csv(file_path)
         print(f"Loaded raw data: {len(df)} rows")
         
-        # Basic data validation and cleaning
-        df = df.dropna(subset=['open', 'high', 'low', 'close', 'volume'])
-        print(f"After dropping rows with missing OHLCV: {len(df)} rows")
+        # Basic data validation and cleaning (ignore volume)
+        df = df.dropna(subset=['open', 'high', 'low', 'close'])
+        print(f"After dropping rows with missing OHLC: {len(df)} rows")
         
         if len(df) == 0:
-            raise ValueError(f"No valid OHLCV data found in {file_path}")
+            raise ValueError(f"No valid OHLC data found in {file_path}")
         
         # Convert timestamp
         df['timestamp'] = pd.to_datetime(df['timestamp'], errors='coerce')
@@ -76,18 +76,17 @@ class DataPreprocessor:
         df = df.sort_values('timestamp').reset_index(drop=True)
         print(f"After timestamp cleaning: {len(df)} rows")
         
-        # Ensure all required columns exist
-        required_columns = ['timestamp', 'open', 'high', 'low', 'close', 'volume']
+        # Ensure all required columns exist (volume not required)
+        required_columns = ['timestamp', 'open', 'high', 'low', 'close']
         missing_columns = [col for col in required_columns if col not in df.columns]
         if missing_columns:
             raise ValueError(f"Missing required columns: {missing_columns}")
         
-        # Validate price data
+        # Validate price data only
         price_cols = ['open', 'high', 'low', 'close']
         for col in price_cols:
             df = df[df[col] > 0]  # Remove zero or negative prices
         
-        df = df[df['volume'] >= 0]  # Remove negative volume
         print(f"After price validation: {len(df)} rows")
         
         if len(df) < 100:  # Need minimum data for technical indicators
@@ -101,7 +100,7 @@ class DataPreprocessor:
         
         # Only drop rows where ALL technical indicators are NaN
         # Keep rows where we have basic price data even if some indicators are missing
-        essential_cols = ['close', 'open', 'high', 'low', 'volume', 'price_change', 'high_low_ratio']
+        essential_cols = ['close', 'open', 'high', 'low', 'price_change', 'high_low_ratio']
         df = df.dropna(subset=essential_cols)
         
         # For remaining NaN values in technical indicators, use forward fill then backward fill
@@ -123,15 +122,16 @@ class DataPreprocessor:
         return df
     
     def _create_features(self, df):
-        """Create technical indicators and price-based features with robust NaN handling"""
+        """Create technical indicators and price-based features - NO VOLUME"""
         # Ensure we have enough data for technical indicators
         if len(df) < 50:  # Minimum for longest MA window
             print("Warning: Dataset too small for all technical indicators")
         
-        # Basic price features (always calculable)
+        # Basic price features (NO VOLUME FEATURES)
         df['price_change'] = df['close'].pct_change().fillna(0)
         df['high_low_ratio'] = (df['high'] / df['low']).fillna(1.0)
-        df['volume_change'] = df['volume'].pct_change().fillna(0)
+        df['price_range'] = ((df['high'] - df['low']) / df['close']).fillna(0)
+        df['open_close_ratio'] = (df['open'] / df['close']).fillna(1.0)
         
         # Technical indicators with conditional calculation
         if len(df) >= 14:  # Minimum for RSI
@@ -149,11 +149,18 @@ class DataPreprocessor:
                 (upper_bb - lower_bb) / middle_bb, 
                 0
             ).fillna(0)
+            # Bollinger position (where current price is relative to bands)
+            df['bb_position'] = np.where(
+                (upper_bb - lower_bb) != 0,
+                (df['close'] - lower_bb) / (upper_bb - lower_bb),
+                0.5
+            ).fillna(0.5)
         else:
             df['bb_upper'] = df['close']
             df['bb_middle'] = df['close'] 
             df['bb_lower'] = df['close']
             df['bb_width'] = 0.0
+            df['bb_position'] = 0.5
         
         if len(df) >= 26:  # Minimum for MACD
             macd_line, signal_line, histogram = self.ti.macd(df['close'])
@@ -176,9 +183,12 @@ class DataPreprocessor:
                     df['close'] / ma_values, 
                     1.0
                 ).fillna(1.0)
+                # Add momentum indicators (price vs MA trend)
+                df[f'{ma_name}_momentum'] = (df['close'] - ma_values).fillna(0)
             else:
                 df[ma_name] = df['close']
                 df[f'{ma_name}_ratio'] = 1.0
+                df[f'{ma_name}_momentum'] = 0.0
         
         # Time-based features (always calculable)
         df['hour_sin'] = np.sin(2 * np.pi * df['timestamp'].dt.hour / 24)
@@ -188,13 +198,38 @@ class DataPreprocessor:
         df['month_sin'] = np.sin(2 * np.pi * df['timestamp'].dt.month / 12)
         df['month_cos'] = np.cos(2 * np.pi * df['timestamp'].dt.month / 12)
         
+        # Additional time features
+        df['is_weekend'] = (df['timestamp'].dt.dayofweek >= 5).astype(float)
+        df['hour_of_day'] = df['timestamp'].dt.hour / 24.0
+        
         # Volatility features
         if len(df) >= 20:
             df['volatility'] = df['close'].rolling(window=20).std().fillna(0.0)
+            df['volatility_ratio'] = np.where(
+                df['close'] != 0,
+                df['volatility'] / df['close'],
+                0
+            ).fillna(0)
         else:
             df['volatility'] = 0.0
+            df['volatility_ratio'] = 0.0
+        
+        # Price momentum features
+        if len(df) >= 5:
+            df['momentum_5'] = (df['close'] / df['close'].shift(5) - 1).fillna(0)
+        else:
+            df['momentum_5'] = 0.0
             
-        df['price_range'] = np.where(df['close'] != 0, (df['high'] - df['low']) / df['close'], 0).fillna(0)
+        if len(df) >= 10:
+            df['momentum_10'] = (df['close'] / df['close'].shift(10) - 1).fillna(0)
+        else:
+            df['momentum_10'] = 0.0
+        
+        # Candle pattern features
+        df['body_size'] = abs(df['close'] - df['open']) / df['close']
+        df['upper_shadow'] = (df['high'] - np.maximum(df['open'], df['close'])) / df['close']
+        df['lower_shadow'] = (np.minimum(df['open'], df['close']) - df['low']) / df['close']
+        df['is_green'] = (df['close'] > df['open']).astype(float)
         
         return df
     

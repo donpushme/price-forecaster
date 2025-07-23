@@ -18,13 +18,14 @@ def check_data_files(file_paths):
             # Load and validate the CSV file
             df = pd.read_csv(file_path)
             
-            # Check required columns
-            required_columns = ['timestamp', 'open', 'high', 'low', 'close', 'volume']
+            # Check required columns (volume optional since we ignore it)
+            required_columns = ['timestamp', 'open', 'high', 'low', 'close']
             missing_columns = [col for col in required_columns if col not in df.columns]
             
             if missing_columns:
                 print(f"❌ Missing required columns: {missing_columns}")
                 print(f"   Available columns: {list(df.columns)}")
+                print(f"   Note: Volume column is optional and will be ignored")
                 continue
             
             # Check if data is not empty
@@ -65,7 +66,7 @@ def check_data_files(file_paths):
             print(f"   Data completeness: {(1 - df.isna().sum().sum() / (len(df) * len(df.columns))) * 100:.1f}%")
             
             # Estimate minimum required data for training
-            min_required = 60 + 288 + 1000  # sequence_length + prediction_horizon + minimum training samples
+            min_required = 120 + 288 + 1000  # Updated: sequence_length + prediction_horizon + minimum training samples
             if len(df) < min_required:
                 print(f"⚠️  Warning: Only {len(df)} records. Recommended minimum: {min_required}")
                 print("   Model performance may be limited with insufficient data")
@@ -117,7 +118,8 @@ def main():
     if not valid_files:
         print("\n❌ No valid data files found!")
         print("Please ensure your CSV files are in the correct format with columns:")
-        print("   timestamp, open, high, low, close, volume")
+        print("   timestamp, open, high, low, close")
+        print("   (volume column is optional and will be ignored)")
         print("And run the data collection script to gather training data.")
         return
     
