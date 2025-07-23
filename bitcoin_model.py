@@ -322,7 +322,10 @@ class BitcoinTrainer:
         """Custom loss function combining price prediction and statistical moments"""
         
         # Price prediction loss (MSE)
-        price_loss = nn.MSELoss()(predictions['prices'], targets)
+        # Use only the close price (index 3) from predictions
+        pred_close = predictions['prices'][:, :, 3]  # shape: (batch, output_steps)
+        # Make sure targets shape matches: (batch, output_steps)
+        price_loss = nn.MSELoss()(pred_close, targets)
         
         # Calculate actual statistical moments from target returns
         target_returns = torch.diff(targets[:, :, 3], dim=1)  # Returns from close prices
