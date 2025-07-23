@@ -491,7 +491,7 @@ def main():
     
     # Create technical features
     print("Creating technical features...")
-    processed_data = processor.load_and_preprocess('sample_data.csv') # Assuming a sample file path
+    processed_data = processor.load_and_preprocess('./training_data/bitcoin_5min.csv') # Assuming a sample file path
     
     # Prepare sequences
     print("Preparing sequences...")
