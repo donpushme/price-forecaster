@@ -320,30 +320,34 @@ class BitcoinTrainer:
         
     def custom_loss(self, predictions: Dict[str, torch.Tensor], targets: torch.Tensor) -> torch.Tensor:
         """Custom loss function combining price prediction and statistical moments"""
-        
         # Price prediction loss (MSE)
-        # Use only the close price (index 3) from predictions
         pred_close = predictions['prices'][:, :, 3]  # (batch, output_steps)
         if targets.ndim == 3 and targets.shape[2] == 1:
             targets = targets.squeeze(-1)
         elif targets.ndim == 3 and targets.shape[2] == 4:
             targets = targets[:, :, 3]
         price_loss = nn.MSELoss()(pred_close, targets)
-        
-        # Calculate actual statistical moments from target returns
-        target_returns = torch.diff(targets, dim=1)  # Returns from close prices
-        target_std = torch.std(target_returns, dim=1, keepdim=True)
-        target_skew = self._calculate_skewness(target_returns)
-        target_kurt = self._calculate_kurtosis(target_returns)
-        
-        # Statistical moments losses
-        vol_loss = nn.MSELoss()(predictions['volatility'][:, :-1], target_std.squeeze())
-        skew_loss = nn.MSELoss()(predictions['skewness'][:, :-1], target_skew)
-        kurt_loss = nn.MSELoss()(predictions['kurtosis'][:, :-1], target_kurt)
-        
+
+        # Calculate actual statistical moments from target returns (per sample)
+        target_returns = torch.diff(targets, dim=1)  # (batch, output_steps-1)
+        # Per-sample moments
+        target_std = torch.std(target_returns, dim=1)  # (batch,)
+        target_skew = self._calculate_skewness(target_returns)  # (batch,)
+        target_kurt = self._calculate_kurtosis(target_returns)  # (batch,)
+
+        # Model's predicted moments: take mean across output steps for each sample
+        pred_vol = predictions['volatility'].mean(dim=1)  # (batch,)
+        pred_skew = predictions['skewness'].mean(dim=1)   # (batch,)
+        pred_kurt = predictions['kurtosis'].mean(dim=1)   # (batch,)
+
+        # Statistical moments losses (per sample)
+        vol_loss = nn.MSELoss()(pred_vol, target_std)
+        skew_loss = nn.MSELoss()(pred_skew, target_skew)
+        kurt_loss = nn.MSELoss()(pred_kurt, target_kurt)
+
         # Combined loss
         total_loss = price_loss + 0.1 * vol_loss + 0.05 * skew_loss + 0.05 * kurt_loss
-        
+
         return total_loss, {
             'price_loss': price_loss.item(),
             'vol_loss': vol_loss.item(),
