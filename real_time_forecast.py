@@ -27,7 +27,7 @@ class RealTimeForecaster:
         }
         
         # API endpoint for current prices
-        self.current_price_url = "https://benchmarks.pyth.network/v1/shims/tradingview/price"
+        self.current_price_url = "https://benchmarks.pyth.network/v1/shims/tradingview/history"
         
         # Historical data files
         self.data_files = {
@@ -58,12 +58,16 @@ class RealTimeForecaster:
         """Get current price for a trading pair"""
         try:
             response = requests.get(self.current_price_url, params={
-                "symbol": trading_pair
+                "symbol": trading_pair,
+                "resolution": "5",
+                "from": int(time.time() - 300),
+                "to": int(time.time())
             })
             data = response.json()
             
-            if "price" in data and data["price"]:
-                return data["price"]
+            price = data["c"][-1]
+            if(price):
+                return price
             else:
                 print(f"No price data for {trading_pair}")
                 return None
