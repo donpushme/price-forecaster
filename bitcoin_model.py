@@ -331,7 +331,7 @@ class BitcoinTrainer:
         price_loss = nn.MSELoss()(pred_close, targets)
         
         # Calculate actual statistical moments from target returns
-        target_returns = torch.diff(targets[:, :, 3], dim=1)  # Returns from close prices
+        target_returns = torch.diff(targets, dim=1)  # Returns from close prices
         target_std = torch.std(target_returns, dim=1, keepdim=True)
         target_skew = self._calculate_skewness(target_returns)
         target_kurt = self._calculate_kurtosis(target_returns)
