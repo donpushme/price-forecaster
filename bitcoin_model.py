@@ -315,7 +315,7 @@ class BitcoinTrainer:
         self.device = device
         self.optimizer = optim.AdamW(model.parameters(), lr=0.001, weight_decay=1e-4)
         self.scheduler = optim.lr_scheduler.ReduceLROnPlateau(
-            self.optimizer, mode='min', factor=0.5, patience=10, verbose=True
+            self.optimizer, mode='min', factor=0.5, patience=10
         )
         
     def custom_loss(self, predictions: Dict[str, torch.Tensor], targets: torch.Tensor) -> torch.Tensor:
