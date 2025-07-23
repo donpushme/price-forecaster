@@ -70,10 +70,11 @@ class DataPreprocessor:
         if missing_columns:
             raise ValueError(f"Missing required columns: {missing_columns}")
         
-        # Create features (this now handles NaN values properly)
+        # Create features (now handles NaN values properly)
         df = self._create_features(df)
         
-        # Reset index after feature creation
+        # No need to drop NaN values anymore since we handle them in _create_features
+        # Just reset index for consistency
         df = df.reset_index(drop=True)
         
         print(f"Loaded {len(df)} records for {asset_name}")
@@ -93,7 +94,8 @@ class DataPreprocessor:
         df['bb_upper'] = upper_bb
         df['bb_middle'] = middle_bb
         df['bb_lower'] = lower_bb
-        df['bb_width'] = (upper_bb - lower_bb) / middle_bb
+        # Fix division by zero in bb_width
+        df['bb_width'] = np.where(middle_bb != 0, (upper_bb - lower_bb) / middle_bb, 0)
         
         macd_line, signal_line, histogram = self.ti.macd(df['close'])
         df['macd'] = macd_line
@@ -104,7 +106,8 @@ class DataPreprocessor:
         mas = self.ti.moving_averages(df['close'])
         for ma_name, ma_values in mas.items():
             df[ma_name] = ma_values
-            df[f'{ma_name}_ratio'] = df['close'] / ma_values
+            # Fix division by zero in MA ratios
+            df[f'{ma_name}_ratio'] = np.where(ma_values != 0, df['close'] / ma_values, 1.0)
         
         # Time-based features
         df['hour'] = df['timestamp'].dt.hour
@@ -113,15 +116,36 @@ class DataPreprocessor:
         
         # Volatility features
         df['volatility'] = df['close'].rolling(window=20).std()
-        df['price_range'] = (df['high'] - df['low']) / df['close']
+        # Fix division by zero in price_range
+        df['price_range'] = np.where(df['close'] != 0, (df['high'] - df['low']) / df['close'], 0)
         
-        # Handle NaN values more intelligently
-        # First, fill NaN values with forward fill, then backward fill
-        df = df.fillna(method='ffill').fillna(method='bfill')
+        # Fill NaN values with appropriate defaults instead of dropping them
+        # For technical indicators, fill with neutral values
+        df['rsi'] = df['rsi'].fillna(50.0)  # Neutral RSI
+        df['macd'] = df['macd'].fillna(0.0)
+        df['macd_signal'] = df['macd_signal'].fillna(0.0)
+        df['macd_histogram'] = df['macd_histogram'].fillna(0.0)
         
-        # If there are still NaN values, fill with 0 for numeric columns
-        numeric_columns = df.select_dtypes(include=[np.number]).columns
-        df[numeric_columns] = df[numeric_columns].fillna(0)
+        # For moving averages, fill with close price
+        for ma_name in ['MA_5', 'MA_10', 'MA_20', 'MA_50']:
+            if ma_name in df.columns:
+                df[ma_name] = df[ma_name].fillna(df['close'])
+                df[f'{ma_name}_ratio'] = df[f'{ma_name}_ratio'].fillna(1.0)
+        
+        # For Bollinger Bands, fill with close price
+        df['bb_upper'] = df['bb_upper'].fillna(df['close'])
+        df['bb_middle'] = df['bb_middle'].fillna(df['close'])
+        df['bb_lower'] = df['bb_lower'].fillna(df['close'])
+        df['bb_width'] = df['bb_width'].fillna(0.0)
+        
+        # For volatility and other features
+        df['volatility'] = df['volatility'].fillna(0.0)
+        df['price_range'] = df['price_range'].fillna(0.0)
+        df['price_change'] = df['price_change'].fillna(0.0)
+        df['volume_change'] = df['volume_change'].fillna(0.0)
+        
+        # For high_low_ratio, fill with 1.0 (neutral)
+        df['high_low_ratio'] = df['high_low_ratio'].fillna(1.0)
         
         return df
     
