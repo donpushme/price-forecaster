@@ -19,27 +19,17 @@ A machine learning system for cryptocurrency price forecasting using LSTM with a
 pip install -r requirements.txt
 ```
 
-2. Fetch training data:
+2. Check and fetch training data:
 ```bash
-python fetch_training_data.py
+python check_and_fetch_data.py
 ```
 
-3. Test data format:
+3. Train the models:
 ```bash
-python test_data_fetch.py
+python train_models.py
 ```
 
-4. Train the model:
-```bash
-python model_train.py
-```
-
-5. Test real-time forecasting:
-```bash
-python test_real_time.py
-```
-
-6. Start real-time forecasting:
+4. Start real-time forecasting:
 ```bash
 python real_time_forecast.py
 ```
