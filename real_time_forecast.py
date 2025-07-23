@@ -115,7 +115,7 @@ class RealTimeForecaster:
         return data_point
     
     def prepare_prediction_data(self, asset_name, current_price, current_time):
-        """Prepare data for prediction by combining historical data with current price, using a longer window for technical indicators"""
+        """Prepare data for prediction by combining historical data with current price, using a larger window and filling NaNs in the last row only (real-time best practice)"""
         try:
             # Load historical data
             df = pd.read_csv(self.data_files[asset_name])
@@ -135,9 +135,24 @@ class RealTimeForecaster:
             # Create features
             combined_df = self.predictor.preprocessor._create_features(combined_df)
             combined_df = combined_df.reset_index(drop=True)
-            # Drop NaNs
-            combined_df = combined_df.dropna().reset_index(drop=True)
-            print(f"After feature creation and NaN removal: {len(combined_df)} clean rows")
+            # Fill NaNs in the last row only (neutral values)
+            last_idx = combined_df.index[-1]
+            for col in combined_df.columns:
+                if pd.isna(combined_df.at[last_idx, col]):
+                    if 'rsi' in col:
+                        combined_df.at[last_idx, col] = 50.0
+                    elif 'macd' in col:
+                        combined_df.at[last_idx, col] = 0.0
+                    elif 'ma' in col or 'bb_' in col:
+                        combined_df.at[last_idx, col] = combined_df.at[last_idx, 'close']
+                    else:
+                        combined_df.at[last_idx, col] = 0.0
+            # Now drop NaNs in the rest
+            if len(combined_df) > 1:
+                combined_df = pd.concat([combined_df.iloc[:-1].dropna(), combined_df.iloc[[-1]]], ignore_index=True)
+            else:
+                combined_df = combined_df.dropna().reset_index(drop=True)
+            print(f"After feature creation and NaN handling: {len(combined_df)} clean rows")
             return combined_df
         except Exception as e:
             print(f"Error preparing prediction data for {asset_name}: {e}")
