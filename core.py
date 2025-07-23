@@ -129,33 +129,51 @@ class DataPreprocessor:
             print("Warning: Dataset too small for all technical indicators")
         
         # Basic price features (NO VOLUME FEATURES)
-        df['price_change'] = df['close'].pct_change().fillna(0)
-        df['high_low_ratio'] = (df['high'] / df['low']).fillna(1.0)
-        df['price_range'] = ((df['high'] - df['low']) / df['close']).fillna(0)
-        df['open_close_ratio'] = (df['open'] / df['close']).fillna(1.0)
+        price_change_calc = df['close'].pct_change()
+        df['price_change'] = price_change_calc.fillna(0) if hasattr(price_change_calc, 'fillna') else 0.0
+        
+        high_low_ratio_calc = df['high'] / df['low']
+        df['high_low_ratio'] = high_low_ratio_calc.fillna(1.0) if hasattr(high_low_ratio_calc, 'fillna') else 1.0
+        
+        price_range_calc = (df['high'] - df['low']) / df['close']
+        df['price_range'] = price_range_calc.fillna(0) if hasattr(price_range_calc, 'fillna') else 0.0
+        
+        open_close_ratio_calc = df['open'] / df['close']
+        df['open_close_ratio'] = open_close_ratio_calc.fillna(1.0) if hasattr(open_close_ratio_calc, 'fillna') else 1.0
         
         # Technical indicators with conditional calculation
         if len(df) >= 14:  # Minimum for RSI
-            df['rsi'] = self.ti.rsi(df['close']).fillna(50.0)  # Neutral RSI
+            rsi_values = self.ti.rsi(df['close'])
+            df['rsi'] = rsi_values.fillna(50.0) if hasattr(rsi_values, 'fillna') else 50.0
         else:
             df['rsi'] = 50.0  # Neutral value
         
         if len(df) >= 20:  # Minimum for Bollinger Bands
             upper_bb, middle_bb, lower_bb = self.ti.bollinger_bands(df['close'])
-            df['bb_upper'] = upper_bb.fillna(df['close'])
-            df['bb_middle'] = middle_bb.fillna(df['close'])
-            df['bb_lower'] = lower_bb.fillna(df['close'])
-            df['bb_width'] = np.where(
-                middle_bb.notna() & (middle_bb != 0), 
-                (upper_bb - lower_bb) / middle_bb, 
-                0
-            ).fillna(0)
-            # Bollinger position (where current price is relative to bands)
-            df['bb_position'] = np.where(
-                (upper_bb - lower_bb) != 0,
-                (df['close'] - lower_bb) / (upper_bb - lower_bb),
-                0.5
-            ).fillna(0.5)
+            df['bb_upper'] = upper_bb.fillna(df['close']) if hasattr(upper_bb, 'fillna') else df['close']
+            df['bb_middle'] = middle_bb.fillna(df['close']) if hasattr(middle_bb, 'fillna') else df['close']
+            df['bb_lower'] = lower_bb.fillna(df['close']) if hasattr(lower_bb, 'fillna') else df['close']
+            
+            # Safe calculation for bb_width
+            if hasattr(middle_bb, 'notna'):
+                df['bb_width'] = np.where(
+                    middle_bb.notna() & (middle_bb != 0), 
+                    (upper_bb - lower_bb) / middle_bb, 
+                    0
+                )
+            else:
+                df['bb_width'] = 0.0
+                
+            # Safe calculation for bb_position
+            bb_range = upper_bb - lower_bb
+            if hasattr(bb_range, 'fillna'):
+                df['bb_position'] = np.where(
+                    bb_range != 0,
+                    (df['close'] - lower_bb) / bb_range,
+                    0.5
+                )
+            else:
+                df['bb_position'] = 0.5
         else:
             df['bb_upper'] = df['close']
             df['bb_middle'] = df['close'] 
@@ -165,9 +183,9 @@ class DataPreprocessor:
         
         if len(df) >= 26:  # Minimum for MACD
             macd_line, signal_line, histogram = self.ti.macd(df['close'])
-            df['macd'] = macd_line.fillna(0.0)
-            df['macd_signal'] = signal_line.fillna(0.0)
-            df['macd_histogram'] = histogram.fillna(0.0)
+            df['macd'] = macd_line.fillna(0.0) if hasattr(macd_line, 'fillna') else 0.0
+            df['macd_signal'] = signal_line.fillna(0.0) if hasattr(signal_line, 'fillna') else 0.0
+            df['macd_histogram'] = histogram.fillna(0.0) if hasattr(histogram, 'fillna') else 0.0
         else:
             df['macd'] = 0.0
             df['macd_signal'] = 0.0
@@ -178,14 +196,21 @@ class DataPreprocessor:
         for ma_name, ma_values in mas.items():
             window = int(ma_name.split('_')[1])
             if len(df) >= window:
-                df[ma_name] = ma_values.fillna(df['close'])
-                df[f'{ma_name}_ratio'] = np.where(
-                    ma_values.notna() & (ma_values != 0), 
-                    df['close'] / ma_values, 
-                    1.0
-                ).fillna(1.0)
-                # Add momentum indicators (price vs MA trend)
-                df[f'{ma_name}_momentum'] = (df['close'] - ma_values).fillna(0)
+                df[ma_name] = ma_values.fillna(df['close']) if hasattr(ma_values, 'fillna') else df['close']
+                
+                # Safe ratio calculation
+                if hasattr(ma_values, 'notna'):
+                    df[f'{ma_name}_ratio'] = np.where(
+                        ma_values.notna() & (ma_values != 0), 
+                        df['close'] / ma_values, 
+                        1.0
+                    )
+                else:
+                    df[f'{ma_name}_ratio'] = 1.0
+                
+                # Safe momentum calculation
+                momentum_calc = df['close'] - ma_values
+                df[f'{ma_name}_momentum'] = momentum_calc.fillna(0) if hasattr(momentum_calc, 'fillna') else 0.0
             else:
                 df[ma_name] = df['close']
                 df[f'{ma_name}_ratio'] = 1.0
@@ -205,24 +230,27 @@ class DataPreprocessor:
         
         # Volatility features
         if len(df) >= 20:
-            df['volatility'] = df['close'].rolling(window=20).std().fillna(0.0)
+            volatility_values = df['close'].rolling(window=20).std()
+            df['volatility'] = volatility_values.fillna(0.0) if hasattr(volatility_values, 'fillna') else 0.0
             df['volatility_ratio'] = np.where(
                 df['close'] != 0,
                 df['volatility'] / df['close'],
                 0
-            ).fillna(0)
+            )
         else:
             df['volatility'] = 0.0
             df['volatility_ratio'] = 0.0
         
         # Price momentum features
         if len(df) >= 5:
-            df['momentum_5'] = (df['close'] / df['close'].shift(5) - 1).fillna(0)
+            momentum_5_calc = df['close'] / df['close'].shift(5) - 1
+            df['momentum_5'] = momentum_5_calc.fillna(0) if hasattr(momentum_5_calc, 'fillna') else 0.0
         else:
             df['momentum_5'] = 0.0
             
         if len(df) >= 10:
-            df['momentum_10'] = (df['close'] / df['close'].shift(10) - 1).fillna(0)
+            momentum_10_calc = df['close'] / df['close'].shift(10) - 1
+            df['momentum_10'] = momentum_10_calc.fillna(0) if hasattr(momentum_10_calc, 'fillna') else 0.0
         else:
             df['momentum_10'] = 0.0
         
