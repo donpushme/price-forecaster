@@ -323,8 +323,11 @@ class BitcoinTrainer:
         
         # Price prediction loss (MSE)
         # Use only the close price (index 3) from predictions
-        pred_close = predictions['prices'][:, :, 3]  # shape: (batch, output_steps)
-        # Make sure targets shape matches: (batch, output_steps)
+        pred_close = predictions['prices'][:, :, 3]  # (batch, output_steps)
+        if targets.ndim == 3 and targets.shape[2] == 1:
+            targets = targets.squeeze(-1)
+        elif targets.ndim == 3 and targets.shape[2] == 4:
+            targets = targets[:, :, 3]
         price_loss = nn.MSELoss()(pred_close, targets)
         
         # Calculate actual statistical moments from target returns
